@@ -1,35 +1,14 @@
-# DNet
+# Jointly Train Single View Depth Network and Surface Normal Network
 
-This is the reference PyTorch implementation for training and testing depth estimation models using the method described in
+This is the reference PyTorch implementation for training and testing a sefl-supervised method that estimates single-view absolute depth
+through jointly train a relative depth network and surface normal network 
 
-> **Toward Hierarchical Self-Supervised Monocular Absolute Depth Estimation for Autonomous Driving Applications**
->
-> Feng Xue, Guirong Zhuo<sup>\*</sup>, Ziyuan Huang, Wufei Fu, Zhuoyue Wu and Marcelo H. Ang Jr
->
-> [IROS 2020 accepted](https://arxiv.org/abs/2004.05560)
-
-<p align="center">
-  <img src="assets/demo.gif" alt="example input output gif" width="800" />
-</p>
-
-
-If you find our work useful in your research please consider citing our paper:
-
-```
-@article{xue2020toward,
-  title={Toward Hierarchical Self-Supervised Monocular Absolute Depth Estimation for Autonomous Driving Applications},
-  author={Xue, Feng and Zhuo, Guirong and Huang, Ziyuan and Fu, Wufei and Wu, Zhuoyue and Ang Jr, Marcelo H},
-  journal={arXiv preprint arXiv:2004.05560},
-  year={2020}
-}
-```
-
-This repository is maintained by [Feng Xue](https://github.com/josephxue) and [Ziyuan Huang](https://github.com/huang-ziyuan)
+This repository is maintained by [Khe Yang](https://github.com/kheyang)
 
 
 ## License
 
-The code is derived from [Monodepth v2](https://github.com/nianticlabs/monodepth2)
+The code is derived from [Monodepth v2](https://github.com/nianticlabs/monodepth2) and [DNet](https://github.com/TJ-IPLab/DNet)
 
 Copyright © Niantic, Inc. 2019. Patent Pending. All rights reserved.  
 This code is for non-commercial use; please see the [license file](LICENSE) for terms.
@@ -85,8 +64,15 @@ By default models and tensorboard event files are saved to `~/tmp/<model_name>`.
 This can be changed with the `--log_dir` flag.
 
 **Monocular training:**
+
+***Baseline Network DNet***
 ```shell
 python train.py --model_name mono_model
+```
+
+***Jointly train depth and surface normal network***
+```shell
+python train.py --model_name mono_model --use_surface_normal_net
 ```
 
 **Stereo training:**
@@ -108,7 +94,7 @@ python train.py --model_name mono+stereo_model \
 The code can only be run on a single GPU.
 You can specify which GPU to use with the `CUDA_VISIBLE_DEVICES` environment variable:
 ```shell
-CUDA_VISIBLE_DEVICES=2 python train.py --model_name mono_model
+CUDA_VISIBLE_DEVICES=X python train.py --model_name mono_model --use_surface_normal_net
 ```
 
 ### Finetuning a pretrained model
