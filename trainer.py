@@ -536,7 +536,6 @@ class Trainer:
         for scale in self.opt.scales:
             loss = 0
             reprojection_losses = []
-            depth_normal_consistency_loss = []
 
             source_scale = scale
 

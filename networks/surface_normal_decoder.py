@@ -10,7 +10,7 @@ from layers import *
 
 class SurfaceNormalDecoder(nn.Module):
     def __init__(self, num_ch_enc, scales=range(4), num_output_channels=3, use_skips=True):
-        super(DepthDecoder, self).__init__()
+        super(SurfaceNormalDecoder, self).__init__()
 
         self.num_output_channels = num_output_channels
         self.use_skips = use_skips
