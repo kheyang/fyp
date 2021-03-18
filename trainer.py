@@ -456,12 +456,14 @@ class Trainer:
     def image_edge_based_weight(self, img):
         """"Compute image edge-based weight to relax depth-normal consistency loss
         at discontinuities"""
-        grad_img_x = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]), 1, keepdim=True)
-        grad_img_y = torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]), 1, keepdim=True)
+        alpha = 10
+        #grad_img_x = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]), 1, keepdim=True)
+        #grad_img_y = torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]), 1, keepdim=True)
+        grad_img = torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]) + torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :])
+        return torch.exp(-alpha * grad_img.abs().mean(dim=1, keepdim=True))
+        # return torch.exp(-grad_img_x)+torch.exp(-grad_img_y)
 
-        return torch.exp(-grad_img_x)+torch.exp(-grad_img_y)
-
-    def compute_depth_normal_consistency_loss(self, pred_depth, pred_surface_normal):
+    def compute_depth_normal_consistency_loss(self, pred_depth, pred_surface_normal, img):
         """Computes depth normal consistency loss between the predicted depth and 
         surface normal"""
 
