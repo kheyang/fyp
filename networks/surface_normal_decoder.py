@@ -70,6 +70,6 @@ class SurfaceNormalDecoder(nn.Module):
                     dcfeats.append(upsample(self.dfeats[i], sf=up))
                     up /= 2
             dcfeats = torch.cat((dcfeats), 1)
-            self.outputs[("disp", s)] = self.sigmoid(self.convs[("dispconv", s)](dcfeats))
+            self.outputs[("disp_surface_normal", s)] = self.sigmoid(self.convs[("dispconv", s)](dcfeats))
 
         return self.outputs

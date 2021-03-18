@@ -37,7 +37,8 @@ class Trainer:
 
         # Define the models and the parameters that define the model
         self.models = {}
-        self.parameters_to_train = []
+        self.parameters_to_train_depth = []
+        self.parameters_to_train_surface_normal = []
 
         # Uses CUDA as default 
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
@@ -60,7 +61,7 @@ class Trainer:
         self.models["depth_encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.models["depth_encoder"].to(self.device)
-        self.parameters_to_train += list(self.models["depth_encoder"].parameters())
+        self.parameters_to_train_depth += list(self.models["depth_encoder"].parameters())
 
         # Chooses between baseline network or DNet
         if self.opt.baseline_multiscale:
@@ -70,19 +71,19 @@ class Trainer:
             self.models["depth"] = networks.DepthDecoder(
                 self.models["depth_encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
-        self.parameters_to_train += list(self.models["depth"].parameters())
+        self.parameters_to_train_depth += list(self.models["depth"].parameters())
 
         ######################## Surface normal network ###############################
         if self.opt.use_surface_normal_net:
             self.models["surface_normal_encoder"] = networks.ResnetEncoder(
                 self.opt.num_layers, self.opt.weights_init == "pretrained")
             self.models["surface_normal_encoder"].to(self.device)
-            self.parameters_to_train += list(self.models["surface_normal_encoder"].parameters())
+            self.parameters_to_train_surface_normal += list(self.models["surface_normal_encoder"].parameters())
 
             self.models["surface_normal"] = networks.SurfaceNormalDecoder(
                     self.models["surface_normal_encoder"].num_ch_enc, self.opt.scales)
             self.models["surface_normal"].to(self.device)
-            self.parameters_to_train += list(self.models["surface_normal"].parameters())
+            self.parameters_to_train_surface_normal += list(self.models["surface_normal"].parameters())
         ###############################################################################
 
         # If pose network is used
@@ -94,7 +95,7 @@ class Trainer:
                     num_input_images=self.num_pose_frames)
 
                 self.models["pose_encoder"].to(self.device)
-                self.parameters_to_train += list(self.models["pose_encoder"].parameters())
+                self.parameters_to_train_depth += list(self.models["pose_encoder"].parameters())
 
                 self.models["pose"] = networks.PoseDecoder(
                     self.models["pose_encoder"].num_ch_enc,
@@ -110,7 +111,7 @@ class Trainer:
                     self.num_input_frames if self.opt.pose_model_input == "all" else 2)
 
             self.models["pose"].to(self.device)
-            self.parameters_to_train += list(self.models["pose"].parameters())
+            self.parameters_to_train_depth += list(self.models["pose"].parameters())
 
         if self.opt.predictive_mask:
             assert self.opt.disable_automasking, \
@@ -127,11 +128,11 @@ class Trainer:
                     self.models["encoder"].num_ch_enc, self.opt.scales,
                     num_output_channels=(len(self.opt.frame_ids) - 1))
             self.models["predictive_mask"].to(self.device)
-            self.parameters_to_train += list(self.models["predictive_mask"].parameters())
+            self.parameters_to_train_depth += list(self.models["predictive_mask"].parameters())
 
-        self.model_optimizer_depth = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
+        self.model_optimizer_depth = optim.Adam(self.parameters_to_train_depth, self.opt.learning_rate)
 
-        self.model_optimizer_surface_normal = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
+        self.model_optimizer_surface_normal = optim.Adam(self.parameters_to_train_surface_normal, self.opt.learning_rate)
 
         self.model_lr_scheduler_depth = optim.lr_scheduler.StepLR(
             self.model_optimizer_depth, self.opt.scheduler_step_size, 0.1)
@@ -318,7 +319,7 @@ class Trainer:
 
         if self.use_surface_normal_net:
             features_surface_normal = self.models["surface_normal_encoder"](inputs["color_aug", 0, 0])
-            outputs["surface_normal"] = self.models["surface_normal"](features_surface_normal)
+            outputs.update(self.models["surface_normal"](features_surface_normal))
 
         self.generate_images_pred(inputs, outputs)
         losses = self.compute_losses(inputs, outputs)
@@ -452,52 +453,57 @@ class Trainer:
                     outputs[("color_identity", frame_id, scale)] = \
                         inputs[("color", frame_id, source_scale)]
 
-    def compute_depth_normal_consistency_loss(self, pred, K):
+    def image_edge_based_weight(self, img):
+        """"Compute image edge-based weight to relax depth-normal consistency loss
+        at discontinuities"""
+        grad_img_x = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]), 1, keepdim=True)
+        grad_img_y = torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]), 1, keepdim=True)
+
+        return torch.exp(-grad_img_x)+torch.exp(-grad_img_y)
+
+    def compute_depth_normal_consistency_loss(self, pred_depth, pred_surface_normal):
         """Computes depth normal consistency loss between the predicted depth and 
         surface normal"""
-        traverse_mat = np.array([[-1, 0], [0, 1], [1, 0], [0, -1],
-                                 [1, 1], [1, -1], [-1, 1], [-1, -1]])
+
+        traverse_mat = torch.tensor([[-1, 0], [0, 1], [1, 0], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]])
+
         # Camera intrinsic K of Kitti Dataset
-        """
         K = np.array([[0.58, 0, 0.5, 0],
-                  [0, 1.92, 0.5, 0],
-                  [0, 0, 1, 0],
-                  [0, 0, 0, 1]], dtype=np.float32)
+                      [0, 1.92, 0.5, 0],
+                      [0, 0, 1, 0],
+                      [0, 0, 0, 1]], dtype=np.float32)
+
         # Inverse matrix of K
-        """
         K_inv = np.linalg.inv(K)
+        h, w = len(pred_depth), len(pred_depth[0])
 
-        # Matrix to store the average loss of each pixel
-        loss_mat = np.zeros((self.opt.height, self.opt.width))
+        # Matrix to store the max loss of each pixel
+        loss_mat = torch.zeros(h, w)
 
-        for x in range(self.opt.height):
-            for y in range(self.opt.width):
+        for x in range(h):
+            for y in range(w):
                 # Pixel to be considered
-                p = np.array([x, y, 1])
-                total_loss = 0
-                surrounding_pix = 0
+                p = torch.tensor([x, y, 1])
                 MAX_LOSS = -100
-                for trav in range(8):
+                for trav in range(len(traverse_mat)):
 
                     # Action to be taken from pixel p to pixel q
                     action = traverse_mat[trav]
 
                     # To make sure the neighbouring pixel is not out of bound
-                    if (x + action[0] < 0) or (x + action[0] > self.opt.height) or \
-                            (y + action[1] < 0) or (y + action[1] > self.opt.width):
+                    if (x + action[0] < 0) or (x + action[0] > h) or (y + action[1] < 0) or (y + action[1] > w):
                         continue
 
                     # Neighbouring pixel q
-                    q = np.array([x + action[0], y + action[1], 1])
+                    q = torch.tensor([x + action[0], y + action[1], 1])
 
                     # X(p) and X(q)
                     # Matrix multiplication of K_inv and the pixel coordinate vector
-                    X_p = np.matmul(K_inv, p)
-                    X_q = np.matmul(K_inv, q)
+                    X_p = torch.matmul(K_inv, p)
+                    X_q = torch.matmul(K_inv, q)
 
                     # Depth-Normal consistency loss
-                    loss = abs(depth[p[0]][p[1]] * np.dot(normal[p[0]][p[1]], X_p) -
-                               depth[q[0]][q[1]] * np.dot(normal[p[0]][p[1]], X_q))
+                    loss = abs(pred_depth[p[0]][p[1]] * torch.dot(pred_surface_normal[p[0]][p[1]], X_p) - pred_depth[q[0]][q[1]] * torch.dot(pred_surface_normal[p[0]][p[1]], X_q))
 
                     # Maximum loss
                     if loss > MAX_LOSS:
@@ -530,17 +536,27 @@ class Trainer:
         for scale in self.opt.scales:
             loss = 0
             reprojection_losses = []
+            depth_normal_consistency_loss = []
 
             source_scale = scale
 
             disp = outputs[("disp", scale)]
+            pred_surface_normal = outputs[("disp_surface_normal", scale)]
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
+
+            #####################################################?????
+            pred_depth = outputs[("depth", 0, scale)]
+            #####################################################?????
 
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
-
+            ######################################################################################
+            edge_based_weight = self.image_edge_based_weight(color)
+            depth_normal_consistency_loss = self.compute_depth_normal_consistency_loss(pred_depth, pred_surface_normal)
+            depth_normal_consistency_loss = edge_based_weight * depth_normal_consistency_loss
+            ######################################################################################
             reprojection_losses = torch.cat(reprojection_losses, 1)
 
             if not self.opt.disable_automasking:
@@ -598,6 +614,7 @@ class Trainer:
             smooth_loss = get_smooth_loss(norm_disp, color)
 
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
+            loss += self.opt.depth_normal_param * torch.sum(depth_normal_consistency_loss)
             total_loss += loss
             losses["loss/{}".format(scale)] = loss
 
