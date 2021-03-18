@@ -317,7 +317,7 @@ class Trainer:
         if self.use_pose_net:
             outputs.update(self.predict_poses(inputs, features_depth))
 
-        if self.use_surface_normal_net:
+        if self.opt.use_surface_normal_net:
             features_surface_normal = self.models["surface_normal_encoder"](inputs["color_aug", 0, 0])
             outputs.update(self.models["surface_normal"](features_surface_normal))
 
