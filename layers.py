@@ -348,3 +348,30 @@ def compute_depth_errors(gt, pred):
     sq_rel = torch.mean((gt - pred) ** 2 / gt)
 
     return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3
+
+
+def compute_difference_vectors_8(img):
+    """compute difference vectors using neighbouring 8 points.
+    Outermost pixels in the image are ignored
+    Args:
+        img: Nx3xHxW
+    Returns:
+        list of difference vectors: each element is Nx3x(H-2)x(W-2)
+        the order is as following:
+            5 6 7
+            4 * 0
+            3 2 1
+    """
+    diff_vec_0 = img[:,:,1:-1,2:] - img[:,:,1:-1,1:-1]
+    diff_vec_1 = img[:,:,2:,2:] - img[:,:,1:-1,1:-1]
+    diff_vec_2 = img[:,:,2:,1:-1] - img[:,:,1:-1,1:-1]
+    diff_vec_3 = img[:,:,2:,:-2] - img[:,:,1:-1,1:-1]
+    diff_vec_4 = img[:,:,1:-1,:-2] - img[:,:,1:-1,1:-1]
+    diff_vec_5 = img[:,:,:-2,:-2] - img[:,:,1:-1,1:-1]
+    diff_vec_6 = img[:,:,:-2,1:-1] - img[:,:,1:-1,1:-1]
+    diff_vec_7 = img[:,:,:-2,2:] - img[:,:,1:-1,1:-1]
+    diff_vecs = [diff_vec_0, diff_vec_1, diff_vec_2, diff_vec_3,
+                diff_vec_4, diff_vec_5, diff_vec_6, diff_vec_7]
+    return diff_vecs
+
+

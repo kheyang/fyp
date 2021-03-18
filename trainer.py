@@ -453,15 +453,17 @@ class Trainer:
                     outputs[("color_identity", frame_id, scale)] = \
                         inputs[("color", frame_id, source_scale)]
 
-    def image_edge_based_weight(self, img):
+    def image_edge_based_weight(self, img_grad):
         """"Compute image edge-based weight to relax depth-normal consistency loss
         at discontinuities"""
         alpha = 10
-        #grad_img_x = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]), 1, keepdim=True)
-        #grad_img_y = torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]), 1, keepdim=True)
-        grad_img = torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]) + torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :])
-        return torch.exp(-alpha * grad_img.abs().mean(dim=1, keepdim=True))
+        # grad_img_x = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]), 1, keepdim=True)
+        # grad_img_y = torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]), 1, keepdim=True)
+        # grad_img = torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]) + torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :])
+        # return torch.exp(-alpha * grad_img.abs().mean(dim=1, keepdim=True))
         # return torch.exp(-grad_img_x)+torch.exp(-grad_img_y)
+        return torch.exp(-alpha * img_grad.abs().mean(dim=1, keepdim=True))
+
 
     def compute_depth_normal_consistency_loss(self, pred_depth, pred_surface_normal, img):
         """Computes depth normal consistency loss between the predicted depth and 
@@ -554,7 +556,8 @@ class Trainer:
                 pred = outputs[("color", frame_id, scale)]
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
             ######################################################################################
-            edge_based_weight = self.image_edge_based_weight(color)
+            img_grad = compute_difference_vectors_8(color)
+            edge_based_weight = self.image_edge_based_weight(img_grad)
             depth_normal_consistency_loss = self.compute_depth_normal_consistency_loss(pred_depth, pred_surface_normal)
             depth_normal_consistency_loss = edge_based_weight * depth_normal_consistency_loss
             ######################################################################################
