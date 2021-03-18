@@ -465,11 +465,11 @@ class Trainer:
         return torch.exp(-alpha * torch.abs(img_grad).mean(dim=1, keepdim=True))
 
 
-    def compute_depth_normal_consistency_loss(self, pred_depth, pred_surface_normal, img):
+    def compute_depth_normal_consistency_loss(self, pred_depth, pred_surface_normal, img_grad):
         """Computes depth normal consistency loss between the predicted depth and 
         surface normal"""
 
-        traverse_mat = torch.tensor([[-1, 0], [0, 1], [1, 0], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]])
+        traverse_mat = torch.tensor([[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]])
 
         # Camera intrinsic K of Kitti Dataset
         K = np.array([[0.58, 0, 0.5, 0],
@@ -508,6 +508,7 @@ class Trainer:
 
                     # Depth-Normal consistency loss
                     loss = abs(pred_depth[p[0]][p[1]] * torch.dot(pred_surface_normal[p[0]][p[1]], X_p) - pred_depth[q[0]][q[1]] * torch.dot(pred_surface_normal[p[0]][p[1]], X_q))
+                    loss *= self.image_edge_based_weight(img_grad[trav])
 
                     # Maximum loss
                     if loss > MAX_LOSS:
@@ -558,8 +559,7 @@ class Trainer:
             ######################################################################################
             img_grad = compute_difference_vectors_8(color)
             edge_based_weight = self.image_edge_based_weight(img_grad)
-            depth_normal_consistency_loss = self.compute_depth_normal_consistency_loss(pred_depth, pred_surface_normal)
-            depth_normal_consistency_loss = edge_based_weight * depth_normal_consistency_loss
+            depth_normal_consistency_loss = self.compute_depth_normal_consistency_loss(pred_depth, pred_surface_normal, img_grad)
             ######################################################################################
             reprojection_losses = torch.cat(reprojection_losses, 1)
 
