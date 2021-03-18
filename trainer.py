@@ -462,7 +462,7 @@ class Trainer:
         # grad_img = torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]) + torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :])
         # return torch.exp(-alpha * grad_img.abs().mean(dim=1, keepdim=True))
         # return torch.exp(-grad_img_x)+torch.exp(-grad_img_y)
-        return torch.exp(-alpha * img_grad.abs().mean(dim=1, keepdim=True))
+        return torch.exp(-alpha * torch.abs(img_grad).mean(dim=1, keepdim=True))
 
 
     def compute_depth_normal_consistency_loss(self, pred_depth, pred_surface_normal, img):
