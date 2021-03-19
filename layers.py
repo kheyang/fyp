@@ -370,7 +370,7 @@ def compute_difference_vectors_8(img):
     diff_vec_5 = img[:,:,:-2,:-2] - img[:,:,1:-1,1:-1]
     diff_vec_6 = img[:,:,:-2,1:-1] - img[:,:,1:-1,1:-1]
     diff_vec_7 = img[:,:,:-2,2:] - img[:,:,1:-1,1:-1]
-    diff_vecs = torch.tensor([diff_vec_0, diff_vec_1, diff_vec_2, diff_vec_3, diff_vec_4, diff_vec_5, diff_vec_6, diff_vec_7])
+    diff_vecs = [diff_vec_0, diff_vec_1, diff_vec_2, diff_vec_3, diff_vec_4, diff_vec_5, diff_vec_6, diff_vec_7]
     return diff_vecs
 
 

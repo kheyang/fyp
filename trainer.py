@@ -462,6 +462,7 @@ class Trainer:
         # grad_img = torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]) + torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :])
         # return torch.exp(-alpha * grad_img.abs().mean(dim=1, keepdim=True))
         # return torch.exp(-grad_img_x)+torch.exp(-grad_img_y)
+        img_grad = torch.FloatTensor(img_grad)
         return torch.exp(-alpha * torch.abs(img_grad).mean(dim=1, keepdim=True))
 
 
@@ -469,54 +470,68 @@ class Trainer:
         """Computes depth normal consistency loss between the predicted depth and 
         surface normal"""
 
-        traverse_mat = torch.tensor([[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]])
+        traverse_mat = torch.tensor([[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]]).cuda()
 
         # Camera intrinsic K of Kitti Dataset
+        """
         K = np.array([[0.58, 0, 0.5, 0],
                       [0, 1.92, 0.5, 0],
                       [0, 0, 1, 0],
                       [0, 0, 0, 1]], dtype=np.float32)
+        """
+        K = np.array([[0.58, 0, 0.5],
+                      [0, 1.92, 0.5],
+                      [0, 0, 1]], dtype=np.float32)
 
         # Inverse matrix of K
-        K_inv = np.linalg.inv(K)
+        K_inv = torch.tensor(np.linalg.inv(K)).cuda()
         h, w = len(pred_depth), len(pred_depth[0])
-
+        loss_mats = []
         # Matrix to store the max loss of each pixel
-        loss_mat = torch.zeros(h, w)
+        loss_mat = torch.zeros(h, w).cuda()
+        for i in range(self.opt.batch_size):
+            for x in range(h):
+                for y in range(w):
+                    # Pixel to be considered
+                    p = torch.FloatTensor([x, y, 1]).cuda()
+                    MAX_LOSS = -100
+                    for trav in range(len(traverse_mat)):
 
-        for x in range(h):
-            for y in range(w):
-                # Pixel to be considered
-                p = torch.tensor([x, y, 1])
-                MAX_LOSS = -100
-                for trav in range(len(traverse_mat)):
+                        # Action to be taken from pixel p to pixel q
+                        action = traverse_mat[trav]
 
-                    # Action to be taken from pixel p to pixel q
-                    action = traverse_mat[trav]
+                        # To make sure the neighbouring pixel is not out of bound
+                        if (x + action[0] < 0) or (x + action[0] > h) or (y + action[1] < 0) or (y + action[1] > w):
+                            continue
 
-                    # To make sure the neighbouring pixel is not out of bound
-                    if (x + action[0] < 0) or (x + action[0] > h) or (y + action[1] < 0) or (y + action[1] > w):
-                        continue
+                        # Neighbouring pixel q
+                        q = torch.FloatTensor([x + action[0], y + action[1], 1]).cuda()
 
-                    # Neighbouring pixel q
-                    q = torch.tensor([x + action[0], y + action[1], 1])
+                        # X(p) and X(q)
+                        # Matrix multiplication of K_inv and the pixel coordinate vector
+                        X_p = torch.matmul(K_inv, p)
+                        X_q = torch.matmul(K_inv, q)
+                        print("="*30)
+                        print("Depth Tensor: ", pred_depth.size())
+                        print("=" * 30)
+                        print("Surface Normal Tensor: ", pred_surface_normal.size())
+                        print("=" * 30)
+                        # Depth-Normal consistency loss
+                        # loss = abs(pred_depth[int(p[0])][int(p[1])] * torch.dot(pred_surface_normal[int(p[0])][int(p[1])], X_p) - pred_depth[int(q[0])][int(q[1])] * torch.dot(pred_surface_normal[int(p[0])][int(p[1])], X_q))
+                        loss = abs(
+                            pred_depth[i,0,int(p[0]),int(p[1])] * torch.dot(torch.flatten(pred_surface_normal[i,:,int(p[0]),int(p[1])]),
+                                                                         X_p) - pred_depth[i,0,int(q[0]),
+                                int(q[1])] * torch.dot(torch.flatten(pred_surface_normal[i,:,int(p[0]),int(p[1])]), X_q))
+                        loss *= self.image_edge_based_weight(img_grad[trav]).cuda()
 
-                    # X(p) and X(q)
-                    # Matrix multiplication of K_inv and the pixel coordinate vector
-                    X_p = torch.matmul(K_inv, p)
-                    X_q = torch.matmul(K_inv, q)
+                        # Maximum loss
+                        if loss > MAX_LOSS:
+                            MAX_LOSS = loss
 
-                    # Depth-Normal consistency loss
-                    loss = abs(pred_depth[p[0]][p[1]] * torch.dot(pred_surface_normal[p[0]][p[1]], X_p) - pred_depth[q[0]][q[1]] * torch.dot(pred_surface_normal[p[0]][p[1]], X_q))
-                    loss *= self.image_edge_based_weight(img_grad[trav])
-
-                    # Maximum loss
-                    if loss > MAX_LOSS:
-                        MAX_LOSS = loss
-
-                loss_mat[x][y] = MAX_LOSS
-
-        return loss_mat
+                    loss_mat[x][y] = MAX_LOSS
+            loss_mats.append(loss_mat)
+        loss_mats = torch.cat(loss_mats, 1)
+        return loss_mats
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
@@ -557,12 +572,13 @@ class Trainer:
                 pred = outputs[("color", frame_id, scale)]
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
             ######################################################################################
+
             img_grad = compute_difference_vectors_8(color)
-            edge_based_weight = self.image_edge_based_weight(img_grad)
+            # edge_based_weight = self.image_edge_based_weight(img_grad)
             depth_normal_consistency_loss = self.compute_depth_normal_consistency_loss(pred_depth, pred_surface_normal, img_grad)
             ######################################################################################
+            # Size: 12 x 2 x 192 x 640
             reprojection_losses = torch.cat(reprojection_losses, 1)
-
             if not self.opt.disable_automasking:
                 identity_reprojection_losses = []
                 for frame_id in self.opt.frame_ids[1:]:
