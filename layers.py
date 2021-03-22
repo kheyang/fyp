@@ -374,3 +374,18 @@ def compute_difference_vectors_8(img):
     return diff_vecs
 
 
+def compute_difference_vector_2(xyz):
+    """compute difference vector using 2 neighbours (righ; bottom)
+    surface normal map border (right & bottom) is set to 0
+    Args:
+        xyz (Nx3xHxW): 3d point cloud
+    Returns:
+        diff_vec_1 (Nx3xHxW) horizontal difference vector
+        diff_vec_2 (Nx3xHxW) vectical difference vector
+    """
+    diff_vec_1 = xyz.clone().detach() * 0 # horizontal
+    diff_vec_2 = xyz.clone().detach() * 0 # vectical
+    diff_vec_1[:,:,:,:-1] = xyz[:,:,:,1:] - xyz[:,:,:,:-1]
+    diff_vec_2[:,:,:-1,:] = xyz[:,:,1:,:] - xyz[:,:,:-1,:]
+    return diff_vec_1, diff_vec_2
+

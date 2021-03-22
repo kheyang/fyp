@@ -20,6 +20,7 @@ import json
 from utils import *
 from kitti_utils import *
 from layers import *
+from depth_to_surface_normal import *
 
 import datasets
 import networks
@@ -470,7 +471,8 @@ class Trainer:
         """Computes depth normal consistency loss between the predicted depth and 
         surface normal"""
 
-        traverse_mat = torch.tensor([[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]]).cuda()
+        #traverse_mat = torch.tensor([[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]]).cuda()
+        traverse_mat = torch.tensor([[0, 1], [1, 0]]).cuda()
 
         # Camera intrinsic K of Kitti Dataset
         """
@@ -533,6 +535,28 @@ class Trainer:
         loss_mats = torch.cat(loss_mats, 1)
         return loss_mats
 
+    def direction_ambiguity_loss(self, pred_surface_normal, pred_depth):
+        K = np.array([[0.58, 0, 0.5],
+                      [0, 1.92, 0.5],
+                      [0, 0, 1]], dtype=np.float32)
+
+        # Inverse matrix of K
+        K_inv = torch.tensor(np.linalg.inv(K)).cuda()
+        surface_normal = Depth2Normal(pred_depth, K_inv)
+        angle_rad = torch.acos(((pred_surface_normal[:,0] * surface_normal[:,0]) +
+                            (pred_surface_normal[:,1] * surface_normal[:,1]) +
+                            (pred_surface_normal[:,2] * surface_normal[:,2])) /
+                           (torch.sqrt(torch.square(pred_surface_normal[:,0]) +
+                                       torch.square(pred_surface_normal[:,1]) +
+                                       torch.square(pred_surface_normal[:,2])) *
+                            torch.sqrt(torch.square(surface_normal[:,0]) +
+                                       torch.square(surface_normal[:,1]) +
+                                       torch.square(surface_normal[:,2]))))
+        pi = torch.acos(torch.zeros(1)).item() * 2  # which is 3.1415927410125732
+        angle_deg = (angle_rad/pi) * 180
+        ambiguity_loss = 1 / (1+torch.exp(60-angle_deg))
+        return ambiguity_loss.mean(1, True)
+
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
         """
@@ -571,9 +595,9 @@ class Trainer:
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
-            ######################################################################################
 
-            img_grad = compute_difference_vectors_8(color)
+            ######################################################################################
+            img_grad = compute_difference_vector_2(color)
             # edge_based_weight = self.image_edge_based_weight(img_grad)
             depth_normal_consistency_loss = self.compute_depth_normal_consistency_loss(pred_depth, pred_surface_normal, img_grad)
             ######################################################################################
