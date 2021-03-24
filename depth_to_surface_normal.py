@@ -2,27 +2,27 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .backprojection import Backprojection
+from backprojection import *
 
-
+"""
 def compute_difference_vector_2(xyz):
-    """compute difference vector using 2 neighbours (righ; bottom)
+    """"""compute difference vector using 2 neighbours (righ; bottom)
     surface normal map border (right & bottom) is set to 0
     Args:
         xyz (Nx3xHxW): 3d point cloud
     Returns:
         diff_vec_1 (Nx3xHxW) horizontal difference vector
         diff_vec_2 (Nx3xHxW) vectical difference vector
-    """
-    diff_vec_1 = xyz.copy() * 0 # horizontal
-    diff_vec_2 = xyz.copy() * 0 # vectical
+    """"""
+    diff_vec_1 = xyz.clone().detach() * 0 # horizontal
+    diff_vec_2 = xyz.clone().detach() * 0 # vectical
     diff_vec_1[:,:,:,:-1] = xyz[:,:,:,1:] - xyz[:,:,:,:-1]
     diff_vec_2[:,:,:-1,:] = xyz[:,:,1:,:] - xyz[:,:,:-1,:]
     return diff_vec_1, diff_vec_2
 
 
 def compute_difference_vectors_8(xyz):
-    """compute difference vectors using neighbouring 8 points. 
+    """"""compute difference vectors using neighbouring 8 points. 
     Outermost pixels in the image are ignored
     Args:
         xyz: Nx3xHxW
@@ -32,7 +32,7 @@ def compute_difference_vectors_8(xyz):
             5 6 7
             4 * 0
             3 2 1
-    """
+    """"""
     diff_vec_0 = xyz[:,:,1:-1,2:] - xyz[:,:,1:-1,1:-1]
     diff_vec_1 = xyz[:,:,2:,2:] - xyz[:,:,1:-1,1:-1]
     diff_vec_2 = xyz[:,:,2:,1:-1] - xyz[:,:,1:-1,1:-1]
@@ -44,7 +44,7 @@ def compute_difference_vectors_8(xyz):
     diff_vecs = [diff_vec_0, diff_vec_1, diff_vec_2, diff_vec_3,
                 diff_vec_4, diff_vec_5, diff_vec_6, diff_vec_7]
     return diff_vecs
-
+"""
 
 def img_grad_weight(img_grad, alpha=10):
     """compute a weighting map based on image gradient
