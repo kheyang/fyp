@@ -506,7 +506,6 @@ class Trainer:
         depth_normal_loss = torch.cat(depth_normal_loss, 1)
 
         depth_normal_loss_max = torch.max(depth_normal_loss[:,0], depth_normal_loss[:,1])
-
         return depth_normal_loss_max
 
     def compute_depth_normal_consistency_loss_archive(self, pred_depth, pred_surface_normal, img_grad_x, img_grad_y):
@@ -585,13 +584,27 @@ class Trainer:
         return loss_mats
 
     def direction_ambiguity_loss(self, pred_surface_normal, pred_depth):
-        K = np.array([[0.58, 0, 0.5],
-                      [0, 1.92, 0.5],
-                      [0, 0, 1]], dtype=np.float32)
-
+        K = torch.tensor([[0.58, 0, 0.5, 0],
+                          [0, 1.92, 0.5, 0],
+                          [0, 0, 1, 0],
+                          [0, 0, 0, 1]]).cuda()
+        K = K.unsqueeze(0)
+        K = K.repeat(self.opt.batch_size, 1, 1)
+        print(K.size())
+        print("HERE!!!")
         # Inverse matrix of K
-        K_inv = torch.tensor(np.linalg.inv(K)).cuda()
-        surface_normal = Depth2Normal(pred_depth, K_inv)
+        K_inv = torch.inverse(K)
+        print("invk no prob")
+        h, w = len(pred_depth[0][0]), len(pred_depth[0][0][0])
+        print("HW no prob")
+        depth_to_normal = Depth2Normal(h, w)
+        print("A")
+        surface_normal = depth_to_normal(pred_depth, K_inv)
+        print("B")
+
+        print("C")
+        print(surface_normal.size())
+        print("ANGLE!!!!!")
         angle_rad = torch.acos(((pred_surface_normal[:, 0] * surface_normal[:, 0]) +
                                 (pred_surface_normal[:, 1] * surface_normal[:, 1]) +
                                 (pred_surface_normal[:, 2] * surface_normal[:, 2])) /
@@ -601,8 +614,11 @@ class Trainer:
                                 torch.sqrt(torch.square(surface_normal[:, 0]) +
                                            torch.square(surface_normal[:, 1]) +
                                            torch.square(surface_normal[:, 2]))))
+        print(angle_rad.size())
+        print(angle_rad)
         pi = torch.acos(torch.zeros(1)).item() * 2  # which is 3.1415927410125732
         angle_deg = (angle_rad / pi) * 180
+        print(angle_deg)
         ambiguity_loss = 1 / (1 + torch.exp(60 - angle_deg))
         return ambiguity_loss.mean(1, True)
 
@@ -637,33 +653,18 @@ class Trainer:
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
 
-            #####################################################?????
             pred_depth = outputs[("depth", 0, scale)]
-            #####################################################?????
-            print("Depth: ")
-            print(pred_depth.size())
-            print("-" * 20)
+
             for frame_id in self.opt.frame_ids[1:]:
-                print("Frame ID: " + str(frame_id))
                 pred = outputs[("color", frame_id, scale)]
-                print(pred.size())
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
-            print("-" * 20)
-            ######################################################################################
-            print("Color Size: ")
-            print(color.size())
-            print("-" * 20)
+
             img_grad_x, img_grad_y = compute_difference_vector_2(color)
-            print(img_grad_x.size())
-            print(img_grad_y.size())
-            # edge_based_weight = self.image_edge_based_weight(img_grad)
             depth_normal_consistency_loss = self.compute_depth_normal_consistency_loss(pred_depth, pred_surface_normal,
                                                                                        img_grad_x, img_grad_y)
-            ######################################################################################
-            print(depth_normal_consistency_loss.size())
-            quit()
-            # Size: 12 x 2 x 192 x 640
+            # depth_normal_consistency_loss = torch.sum(depth_normal_consistency_loss, 2).sum(1)
             reprojection_losses = torch.cat(reprojection_losses, 1)
+
             if not self.opt.disable_automasking:
                 identity_reprojection_losses = []
                 for frame_id in self.opt.frame_ids[1:]:
@@ -719,7 +720,10 @@ class Trainer:
             smooth_loss = get_smooth_loss(norm_disp, color)
 
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
-            loss += self.opt.depth_normal_param * torch.sum(depth_normal_consistency_loss)
+            loss += self.opt.depth_normal_param * depth_normal_consistency_loss.mean() / (2**scale)
+
+            direction_ambiguity_loss = self.direction_ambiguity_loss(pred_surface_normal, pred_depth)
+            quit()
             total_loss += loss
             losses["loss/{}".format(scale)] = loss
 
