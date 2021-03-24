@@ -82,7 +82,7 @@ class Trainer:
             self.parameters_to_train_surface_normal += list(self.models["surface_normal_encoder"].parameters())
 
             self.models["surface_normal"] = networks.SurfaceNormalDecoder(
-                    self.models["surface_normal_encoder"].num_ch_enc, self.opt.scales)
+                self.models["surface_normal_encoder"].num_ch_enc, self.opt.scales)
             self.models["surface_normal"].to(self.device)
             self.parameters_to_train_surface_normal += list(self.models["surface_normal"].parameters())
         ###############################################################################
@@ -133,7 +133,8 @@ class Trainer:
 
         self.model_optimizer_depth = optim.Adam(self.parameters_to_train_depth, self.opt.learning_rate)
 
-        self.model_optimizer_surface_normal = optim.Adam(self.parameters_to_train_surface_normal, self.opt.learning_rate)
+        self.model_optimizer_surface_normal = optim.Adam(self.parameters_to_train_surface_normal,
+                                                         self.opt.learning_rate)
 
         self.model_lr_scheduler_depth = optim.lr_scheduler.StepLR(
             self.model_optimizer_depth, self.opt.scheduler_step_size, 0.1)
@@ -240,7 +241,7 @@ class Trainer:
         self.epoch = 0
         self.step = 0
         self.start_time = time.time()
-        for self.epoch in range(self.opt.num_epochs): # Default 20 epochs
+        for self.epoch in range(self.opt.num_epochs):  # Default 20 epochs
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
@@ -252,7 +253,7 @@ class Trainer:
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
-            print(batch_idx, inputs)
+            # print(batch_idx, inputs)
             # Record current time before the training starts
             before_op_time = time.time()
 
@@ -428,7 +429,6 @@ class Trainer:
 
                 # from the authors of https://arxiv.org/abs/1712.00175
                 if self.opt.pose_model_type == "posecnn":
-
                     axisangle = outputs[("axisangle", 0, frame_id)]
                     translation = outputs[("translation", 0, frame_id)]
 
@@ -458,14 +458,9 @@ class Trainer:
         """"Compute image edge-based weight to relax depth-normal consistency loss
         at discontinuities"""
         alpha = 10
-        # grad_img_x = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]), 1, keepdim=True)
-        # grad_img_y = torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]), 1, keepdim=True)
-        # grad_img = torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]) + torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :])
-        # return torch.exp(-alpha * grad_img.abs().mean(dim=1, keepdim=True))
-        # return torch.exp(-grad_img_x)+torch.exp(-grad_img_y)
-        img_grad = torch.FloatTensor(img_grad)
-        return torch.exp(-alpha * torch.abs(img_grad).mean(dim=1, keepdim=True))
-
+        img_grad_stack = torch.stack((img_grad[:,0],img_grad[:,1],img_grad[:,2]),3)
+        l2_norm = torch.norm(img_grad_stack, dim = 3)
+        return torch.exp(-alpha * l2_norm)
 
     def compute_depth_normal_consistency_loss(self, pred_depth, pred_surface_normal, img_grad_x, img_grad_y):
         """Computes depth normal consistency loss between the predicted depth and 
@@ -478,44 +473,41 @@ class Trainer:
 
         # Inverse matrix of K
         K_inv = torch.tensor(np.linalg.inv(K)).cuda()
-
         depth_inv = 1 / pred_depth
-
-        h, w = len(pred_depth), len(pred_depth[0])
-        X = torch.zeros(h,w).cuda()
+        pred_surface_normal = torch.stack(
+            (pred_surface_normal[:, 0], pred_surface_normal[:, 1], pred_surface_normal[:, 2]), 3)
+        h, w = len(pred_depth[0][0]), len(pred_depth[0][0][0])
+        X = torch.zeros(h, w, 3).cuda()
+        depth_normal_loss = []
 
         for i in range(h):
             for j in range(w):
-                X[i][j] = torch.matmul(K_inv, torch.transpose(torch.tensor([i, j, 1])))
+                X[i][j] = torch.matmul(K_inv, torch.FloatTensor([i, j, 1]).cuda())
 
-        depth_normal_loss_x = torch.matmul(img_grad_x, torch.abs(
-            torch.matmul(depth_inv[:,:,:-1,:-1],
-                         torch.dot(pred_surface_normal[:,:,:-1,:-1], X[:,:-1,1:])) - \
-            torch.matmul(depth_inv[:,:,:-1,1:],
-                         torch.dot(pred_surface_normal[:,:,:-1,:-1], X[:,:-1,:-1]))
-        ))
-        depth_normal_loss_y = torch.matmul(img_grad_y, torch.abs(
-            torch.matmul(depth_inv[:,:,:-1,:-1],
-                         torch.dot(pred_surface_normal[:,:,:-1,:-1], X[:,1:,:-1])) - \
-            torch.matmul(depth_inv[:,:,1:,:-1],
-                         torch.dot(pred_surface_normal[:,:,:-1,:-1], X[:,:-1,:-1]))
-        ))
+        img_grad_weight_x = self.image_edge_based_weight(img_grad_x)
+        img_grad_weight_y = self.image_edge_based_weight(img_grad_y)
 
+        Np_Xq_x = torch.einsum('abcd, bcd -> abc', pred_surface_normal[:, :-1, :-1], X[:-1, 1:])
+        Np_Xp_x = torch.einsum('abcd, bcd -> abc', pred_surface_normal[:, :-1, :-1], X[:-1, :-1])
 
+        depth_normal_loss_x = img_grad_weight_x[:,None,:-1,:-1] * \
+                              torch.abs(depth_inv[:, :, :-1, :-1] * Np_Xq_x[:, None] -
+                                        depth_inv[:, :, :-1, 1:] * Np_Xp_x[:, None])
+        depth_normal_loss.append(depth_normal_loss_x)
 
+        Np_Xq_y = torch.einsum('abcd, bcd -> abc', pred_surface_normal[:, :-1, :-1], X[1:, :-1])
+        Np_Xp_y = torch.einsum('abcd, bcd -> abc', pred_surface_normal[:, :-1, :-1], X[:-1, :-1])
 
+        depth_normal_loss_y = img_grad_weight_y[:,None,:-1,:-1] * \
+                              torch.abs(depth_inv[:,:,:-1,:-1] * Np_Xq_y[:, None] -
+                                        depth_inv[:,:,1:,:-1] * Np_Xp_y[:, None])
+        depth_normal_loss.append(depth_normal_loss_y)
 
+        depth_normal_loss = torch.cat(depth_normal_loss, 1)
 
+        depth_normal_loss_max = torch.max(depth_normal_loss[:,0], depth_normal_loss[:,1])
 
-
-
-
-
-
-
-
-
-
+        return depth_normal_loss_max
 
     def compute_depth_normal_consistency_loss_archive(self, pred_depth, pred_surface_normal, img_grad_x, img_grad_y):
         """Computes depth normal consistency loss between the predicted depth and
@@ -600,18 +592,18 @@ class Trainer:
         # Inverse matrix of K
         K_inv = torch.tensor(np.linalg.inv(K)).cuda()
         surface_normal = Depth2Normal(pred_depth, K_inv)
-        angle_rad = torch.acos(((pred_surface_normal[:,0] * surface_normal[:,0]) +
-                            (pred_surface_normal[:,1] * surface_normal[:,1]) +
-                            (pred_surface_normal[:,2] * surface_normal[:,2])) /
-                           (torch.sqrt(torch.square(pred_surface_normal[:,0]) +
-                                       torch.square(pred_surface_normal[:,1]) +
-                                       torch.square(pred_surface_normal[:,2])) *
-                            torch.sqrt(torch.square(surface_normal[:,0]) +
-                                       torch.square(surface_normal[:,1]) +
-                                       torch.square(surface_normal[:,2]))))
+        angle_rad = torch.acos(((pred_surface_normal[:, 0] * surface_normal[:, 0]) +
+                                (pred_surface_normal[:, 1] * surface_normal[:, 1]) +
+                                (pred_surface_normal[:, 2] * surface_normal[:, 2])) /
+                               (torch.sqrt(torch.square(pred_surface_normal[:, 0]) +
+                                           torch.square(pred_surface_normal[:, 1]) +
+                                           torch.square(pred_surface_normal[:, 2])) *
+                                torch.sqrt(torch.square(surface_normal[:, 0]) +
+                                           torch.square(surface_normal[:, 1]) +
+                                           torch.square(surface_normal[:, 2]))))
         pi = torch.acos(torch.zeros(1)).item() * 2  # which is 3.1415927410125732
-        angle_deg = (angle_rad/pi) * 180
-        ambiguity_loss = 1 / (1+torch.exp(60-angle_deg))
+        angle_deg = (angle_rad / pi) * 180
+        ambiguity_loss = 1 / (1 + torch.exp(60 - angle_deg))
         return ambiguity_loss.mean(1, True)
 
     def compute_reprojection_loss(self, pred, target):
@@ -650,7 +642,7 @@ class Trainer:
             #####################################################?????
             print("Depth: ")
             print(pred_depth.size())
-            print("-"*20)
+            print("-" * 20)
             for frame_id in self.opt.frame_ids[1:]:
                 print("Frame ID: " + str(frame_id))
                 pred = outputs[("color", frame_id, scale)]
@@ -665,7 +657,8 @@ class Trainer:
             print(img_grad_x.size())
             print(img_grad_y.size())
             # edge_based_weight = self.image_edge_based_weight(img_grad)
-            depth_normal_consistency_loss = self.compute_depth_normal_consistency_loss(pred_depth, pred_surface_normal, img_grad_x, img_grad_y)
+            depth_normal_consistency_loss = self.compute_depth_normal_consistency_loss(pred_depth, pred_surface_normal,
+                                                                                       img_grad_x, img_grad_y)
             ######################################################################################
             print(depth_normal_consistency_loss.size())
             quit()
@@ -717,7 +710,7 @@ class Trainer:
 
             if not self.opt.disable_automasking:
                 outputs["identity_selection/{}".format(scale)] = (
-                    idxs > identity_reprojection_loss.shape[1] - 1).float()
+                        idxs > identity_reprojection_loss.shape[1] - 1).float()
 
             loss += to_optimise.mean() / (2 ** scale)
 
@@ -770,11 +763,11 @@ class Trainer:
         samples_per_sec = self.opt.batch_size / duration
         time_sofar = time.time() - self.start_time
         training_time_left = (
-            self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
+                                     self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
         print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
-            " | loss: {:.5f} | time elapsed: {} | time left: {}"
+                       " | loss: {:.5f} | time elapsed: {} | time left: {}"
         print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
-              sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
+                                  sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
 
     def log(self, mode, inputs, outputs, losses):
         """Write an event to the tensorboard events file
