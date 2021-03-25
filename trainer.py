@@ -20,7 +20,6 @@ import json
 from utils import *
 from kitti_utils import *
 from layers import *
-from depth_to_surface_normal import *
 
 import datasets
 import networks
@@ -475,41 +474,48 @@ class Trainer:
 
         # Inverse matrix of K
         K_inv = torch.tensor(np.linalg.inv(K)).cuda()
+
+        # Inverse depth
         depth_inv = 1 / pred_depth
+
+        # Reshaping predicted surface normal into a tensor of shape NxHxWx3
+        # with the surface normal vector at the last dimension
         pred_surface_normal = torch.stack(
             (pred_surface_normal[:, 0], pred_surface_normal[:, 1], pred_surface_normal[:, 2]), 3)
-        h, w = len(pred_depth[0][0]), len(pred_depth[0][0][0])
-        X = torch.zeros(h, w, 3).cuda()
-        depth_normal_loss = []
 
+        h, w = len(pred_depth[0][0]), len(pred_depth[0][0][0])
+
+        # Matrix X stores (K_inv * location U of pixel p)
+        X = torch.zeros(h, w, 3).cuda()
         for i in range(h):
             for j in range(w):
                 X[i][j] = torch.matmul(K_inv, torch.FloatTensor([i, j, 1]).cuda())
 
+        depth_normal_loss = []
+
+        # Image gradient weight of x and y axis
         img_grad_weight_x = self.image_edge_based_weight(img_grad_x)
         img_grad_weight_y = self.image_edge_based_weight(img_grad_y)
 
+        # N(p) * X(p)
+        Np_Xp = torch.einsum('abcd, bcd -> abc', pred_surface_normal[:, :-1, :-1], X[:-1, :-1])
+        # N(p) * X(q) with q along x axis
         Np_Xq_x = torch.einsum('abcd, bcd -> abc', pred_surface_normal[:, :-1, :-1], X[:-1, 1:])
-        Np_Xp_x = torch.einsum('abcd, bcd -> abc', pred_surface_normal[:, :-1, :-1], X[:-1, :-1])
+        # N(p) * X(q) with q along y axis
+        Np_Xq_y = torch.einsum('abcd, bcd -> abc', pred_surface_normal[:, :-1, :-1], X[1:, :-1])
 
         depth_normal_loss_x = img_grad_weight_x[:,None,:-1,:-1] * \
                               torch.abs(depth_inv[:, :, :-1, :-1] * Np_Xq_x[:, None] -
-                                        depth_inv[:, :, :-1, 1:] * Np_Xp_x[:, None])
+                                        depth_inv[:, :, :-1, 1:] * Np_Xp[:, None])
         depth_normal_loss.append(depth_normal_loss_x)
-
-        Np_Xq_y = torch.einsum('abcd, bcd -> abc', pred_surface_normal[:, :-1, :-1], X[1:, :-1])
-        Np_Xp_y = torch.einsum('abcd, bcd -> abc', pred_surface_normal[:, :-1, :-1], X[:-1, :-1])
 
         depth_normal_loss_y = img_grad_weight_y[:,None,:-1,:-1] * \
                               torch.abs(depth_inv[:,:,:-1,:-1] * Np_Xq_y[:, None] -
-                                        depth_inv[:,:,1:,:-1] * Np_Xp_y[:, None])
-
+                                        depth_inv[:,:,1:,:-1] * Np_Xp[:, None])
         depth_normal_loss.append(depth_normal_loss_y)
 
         depth_normal_loss = torch.cat(depth_normal_loss, 1)
-
         depth_normal_loss_max = torch.max(depth_normal_loss[:,0], depth_normal_loss[:,1])
-
         return depth_normal_loss_max
 
     def direction_ambiguity_loss(self, pred_surface_normal, pred_depth):
@@ -522,8 +528,10 @@ class Trainer:
                           [0, 0, 0, 1]]).cuda()
         K = K.unsqueeze(0)
         K = K.repeat(self.opt.batch_size, 1, 1)
+
         # Inverse matrix of K
         K_inv = torch.inverse(K)
+
         h, w = len(pred_depth[0][0]), len(pred_depth[0][0][0])
         depth_to_normal = Depth2Normal(h, w)
         surface_normal = depth_to_normal(pred_depth, K_inv)

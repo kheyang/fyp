@@ -389,3 +389,130 @@ def compute_difference_vector_2(xyz):
     diff_vec_2[:,:,:-1,:] = xyz[:,:,1:,:] - xyz[:,:,:-1,:]
     return diff_vec_1, diff_vec_2
 
+def cross_product(a, b):
+    """compute cross product of vec_1 and vec_2. i.e. vec_1 X vec_2
+    Args:
+        a (Nx3xHxW): vec_1
+        b (Nx3xHxW): vec_2
+    Returns:
+        cross_prod (Nx3xHxW): cross product
+    """
+    s1 = a[:,1:2] * b[:,2:3] - b[:,1:2] * a[:,2:3]
+    s2 = a[:,2:3] * b[:,0:1] - b[:,2:3] * a[:,0:1]
+    s3 = a[:,0:1] * b[:,1:2] - b[:,0:1] * a[:,1:2]
+    cross_prod = torch.cat([s1, s2, s3], dim=1)
+    cross_prod[:,:,-1:] = cross_prod[:,:,-2:-1]
+    cross_prod[:,:,:,-1:] = cross_prod[:,:,:,-2:-1]
+    return cross_prod
+
+
+class Depth2Normal(nn.Module):
+    """Layer to compute surface normal from depth map
+    """
+    def __init__(self, height, width, num_neighbour=8):
+        """
+        Args:
+            height (int): image height
+            width (int): image width
+            num_neighbour (int): number of neighbours for computing surface normal
+                - 2: only right and bottom neighbouring pixels are used
+                - 8: 8 neighbouring pixels are used with edge-aware weighting
+        """
+        super(Depth2Normal, self).__init__()
+
+        self.height = height
+        self.width = width
+        self.num_neighbour = num_neighbour
+
+        self.backproj = Backprojection(height, width)
+
+    def forward(self, depth, inv_K):
+        """
+        Args:
+            depth (Nx1xHxW): depth map
+            inv_K (Nx4x4): inverse camera intrinsics
+            img (NxCxHxW): if provided, image gradients are computed for edge-aware weighting
+        Returns:
+            normal (Nx3xHxW): normalized surface normal
+        """
+        # Compute 3D point cloud
+        xyz = self.backproj(depth, inv_K)
+        xyz = xyz.view(depth.shape[0], 4, self.height, self.width)
+        xyz = xyz[:,:3]
+        # Compute surface normal
+        if self.num_neighbour == 2:
+            diff_vec_x, diff_vec_y = compute_difference_vector_2(xyz)
+            normal = cross_product(diff_vec_y, diff_vec_x)
+        elif self.num_neighbour == 8:
+            # Compute surface normals
+            diff_vecs = compute_difference_vectors_8(xyz)
+            normal_0 = cross_product(diff_vecs[2], diff_vecs[0])
+            normal_1 = cross_product(diff_vecs[3], diff_vecs[1])
+            normal_2 = cross_product(diff_vecs[6], diff_vecs[4])
+            normal_3 = cross_product(diff_vecs[7], diff_vecs[5])
+            norm_normal_0 = normal_0 / torch.norm(normal_0, p=2, dim=1, keepdim=True)
+            norm_normal_1 = normal_1 / torch.norm(normal_1, p=2, dim=1, keepdim=True)
+            norm_normal_2 = normal_2 / torch.norm(normal_2, p=2, dim=1, keepdim=True)
+            norm_normal_3 = normal_3 / torch.norm(normal_3, p=2, dim=1, keepdim=True)
+            weight_0 = norm_normal_0.clone() * 0 + 1.
+            weight_1 = norm_normal_0.clone() * 0 + 1.
+            weight_2 = norm_normal_0.clone() * 0 + 1.
+            weight_3 = norm_normal_0.clone() * 0 + 1.
+            normal = weight_0 * norm_normal_0 + weight_1 * norm_normal_1 + weight_2 * norm_normal_2 + weight_3 * norm_normal_3
+
+        # normalize to unit vector
+        norm_normal = torch.norm(normal, p=2, dim=1, keepdim=True)
+        normal = normal / norm_normal
+        return normal
+
+
+class Backprojection(nn.Module):
+    """Layer to backproject a depth image given the camera intrinsics
+    Attributes
+        xy (Nx3x(HxW)): homogeneous pixel coordinates on regular grid
+    """
+    def __init__(self, height, width):
+        """
+        Args:
+            height (int): image height
+            width (int): image width
+        """
+        super(Backprojection, self).__init__()
+
+        self.height = height
+        self.width = width
+
+        # generate regular grid
+        meshgrid = np.meshgrid(range(self.width), range(self.height), indexing='xy')
+        id_coords = np.stack(meshgrid, axis=0).astype(np.float32)
+        id_coords = torch.tensor(id_coords)
+
+        # generate homogeneous pixel coordinates
+        self.ones = nn.Parameter(torch.ones(1, 1, self.height * self.width),
+                                 requires_grad=False)
+        self.xy = torch.unsqueeze(
+                        torch.stack([id_coords[0].view(-1), id_coords[1].view(-1)], 0)
+                        , 0)
+        self.xy = torch.cat([self.xy, self.ones], 1)
+        self.xy = nn.Parameter(self.xy, requires_grad=False)
+
+    def forward(self, depth, inv_K, img_like_out=False):
+        """
+        Args:
+            depth (Nx1xHxW): depth map
+            inv_K (Nx4x4): inverse camera intrinsics
+            img_like_out (bool): if True, the output shape is Nx4xHxW; else Nx4x(HxW)
+        Returns:
+            points (Nx4x(HxW)): 3D points in homogeneous coordinates
+        """
+        depth = depth.contiguous()
+
+        xy = self.xy.repeat(depth.shape[0], 1, 1).cuda()
+        ones = self.ones.repeat(depth.shape[0],1,1).cuda()
+        points = torch.matmul(inv_K[:, :3, :3], xy)
+        points = depth.view(depth.shape[0], 1, -1) * points
+        points = torch.cat((points, ones), 1)
+
+        if img_like_out:
+            points = points.reshape(depth.shape[0], 4, self.height, self.width)
+        return points
