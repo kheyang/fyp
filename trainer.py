@@ -253,6 +253,7 @@ class Trainer:
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
+            print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
             # print(batch_idx, inputs)
             # Record current time before the training starts
             before_op_time = time.time()
@@ -390,12 +391,13 @@ class Trainer:
         """Validate the model on a single minibatch
         """
         self.set_eval()
+        print("1")
         try:
             inputs = self.val_iter.next()
         except StopIteration:
             self.val_iter = iter(self.val_loader)
             inputs = self.val_iter.next()
-
+        print("2")
         with torch.no_grad():
             outputs, losses = self.process_batch(inputs)
 
@@ -404,7 +406,7 @@ class Trainer:
 
             self.log("val", inputs, outputs, losses)
             del inputs, outputs, losses
-
+        print("3")
         self.set_train()
 
     def generate_images_pred(self, inputs, outputs):
@@ -501,126 +503,45 @@ class Trainer:
         depth_normal_loss_y = img_grad_weight_y[:,None,:-1,:-1] * \
                               torch.abs(depth_inv[:,:,:-1,:-1] * Np_Xq_y[:, None] -
                                         depth_inv[:,:,1:,:-1] * Np_Xp_y[:, None])
+
         depth_normal_loss.append(depth_normal_loss_y)
 
         depth_normal_loss = torch.cat(depth_normal_loss, 1)
 
         depth_normal_loss_max = torch.max(depth_normal_loss[:,0], depth_normal_loss[:,1])
+
         return depth_normal_loss_max
 
-    def compute_depth_normal_consistency_loss_archive(self, pred_depth, pred_surface_normal, img_grad_x, img_grad_y):
-        """Computes depth normal consistency loss between the predicted depth and
-        surface normal"""
-
-        # traverse_mat = torch.tensor([[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]]).cuda()
-        traverse_mat = torch.tensor([[0, 1], [1, 0]]).cuda()
-
-        # Camera intrinsic K of Kitti Dataset
-        """
-        K = np.array([[0.58, 0, 0.5, 0],
-                      [0, 1.92, 0.5, 0],
-                      [0, 0, 1, 0],
-                      [0, 0, 0, 1]], dtype=np.float32)
-        """
-        K = np.array([[0.58, 0, 0.5],
-                      [0, 1.92, 0.5],
-                      [0, 0, 1]], dtype=np.float32)
-
-        # Inverse matrix of K
-        K_inv = torch.tensor(np.linalg.inv(K)).cuda()
-        h, w = len(pred_depth), len(pred_depth[0])
-        loss_mats = []
-        # Matrix to store the max loss of each pixel
-        loss_mat = torch.zeros(h, w).cuda()
-
-        for i in range(self.opt.batch_size):
-            for x in range(h):
-                for y in range(w):
-                    # Pixel to be considered
-                    p = torch.FloatTensor([x, y, 1]).cuda()
-                    MAX_LOSS = -100
-                    for trav in range(len(traverse_mat)):
-
-                        # Action to be taken from pixel p to pixel q
-                        action = traverse_mat[trav]
-
-                        # To make sure the neighbouring pixel is not out of bound
-                        if (x + action[0] < 0) or (x + action[0] > h) or (y + action[1] < 0) or (y + action[1] > w):
-                            continue
-
-                        # Neighbouring pixel q
-                        q = torch.FloatTensor([x + action[0], y + action[1], 1]).cuda()
-
-                        # X(p) and X(q)
-                        # Matrix multiplication of K_inv and the pixel coordinate vector
-                        X_p = torch.matmul(K_inv, p)
-                        X_q = torch.matmul(K_inv, q)
-                        print("=" * 30)
-                        print("Depth Tensor: ", pred_depth.size())
-                        print("=" * 30)
-                        print("Surface Normal Tensor: ", pred_surface_normal.size())
-                        print("=" * 30)
-                        # Depth-Normal consistency loss
-                        # loss = abs(pred_depth[int(p[0])][int(p[1])] * torch.dot(pred_surface_normal[int(p[0])][int(p[1])], X_p) - pred_depth[int(q[0])][int(q[1])] * torch.dot(pred_surface_normal[int(p[0])][int(p[1])], X_q))
-                        loss = abs(
-                            pred_depth[i, 0, int(p[0]), int(p[1])] * torch.dot(
-                                torch.flatten(pred_surface_normal[i, :, int(p[0]), int(p[1])]),
-                                X_p) - pred_depth[i, 0, int(q[0]),
-                                                  int(q[1])] * torch.dot(
-                                torch.flatten(pred_surface_normal[i, :, int(p[0]), int(p[1])]), X_q))
-                        if trav == 0:
-                            loss *= self.image_edge_based_weight(img_grad_x).cuda()
-                        else:
-                            loss *= self.image_edge_based_weight(img_grad_y).cuda()
-
-                        # Maximum loss
-                        if loss > MAX_LOSS:
-                            MAX_LOSS = loss
-
-                    loss_mat[x][y] = MAX_LOSS
-            loss_mats.append(loss_mat)
-
-        loss_mats = torch.cat(loss_mats, 1)
-        return loss_mats
-
     def direction_ambiguity_loss(self, pred_surface_normal, pred_depth):
+        """Computes direction ambiguity loss that penalizes direction ambiguities introduced
+        by the depth normal consistency term"""
+
         K = torch.tensor([[0.58, 0, 0.5, 0],
                           [0, 1.92, 0.5, 0],
                           [0, 0, 1, 0],
                           [0, 0, 0, 1]]).cuda()
         K = K.unsqueeze(0)
         K = K.repeat(self.opt.batch_size, 1, 1)
-        print(K.size())
-        print("HERE!!!")
         # Inverse matrix of K
         K_inv = torch.inverse(K)
-        print("invk no prob")
         h, w = len(pred_depth[0][0]), len(pred_depth[0][0][0])
-        print("HW no prob")
         depth_to_normal = Depth2Normal(h, w)
-        print("A")
         surface_normal = depth_to_normal(pred_depth, K_inv)
-        print("B")
-
-        print("C")
-        print(surface_normal.size())
-        print("ANGLE!!!!!")
-        angle_rad = torch.acos(((pred_surface_normal[:, 0] * surface_normal[:, 0]) +
-                                (pred_surface_normal[:, 1] * surface_normal[:, 1]) +
-                                (pred_surface_normal[:, 2] * surface_normal[:, 2])) /
-                               (torch.sqrt(torch.square(pred_surface_normal[:, 0]) +
-                                           torch.square(pred_surface_normal[:, 1]) +
-                                           torch.square(pred_surface_normal[:, 2])) *
-                                torch.sqrt(torch.square(surface_normal[:, 0]) +
-                                           torch.square(surface_normal[:, 1]) +
-                                           torch.square(surface_normal[:, 2]))))
-        print(angle_rad.size())
-        print(angle_rad)
+        angle_rad = torch.acos(
+            ((pred_surface_normal[:, 0, 1:-1, 1:-1] * surface_normal[:, 0]) +
+             (pred_surface_normal[:, 1, 1:-1, 1:-1] * surface_normal[:, 1]) +
+             (pred_surface_normal[:, 2, 1:-1, 1:-1] * surface_normal[:, 2])) /
+            (torch.sqrt(pred_surface_normal[:, 0, 1:-1, 1:-1] ** 2 +
+                        pred_surface_normal[:, 1, 1:-1, 1:-1] ** 2 +
+                        pred_surface_normal[:, 2, 1:-1, 1:-1] ** 2) *
+             torch.sqrt(surface_normal[:,0]**2 +
+                        surface_normal[:,1]**2 +
+                        surface_normal[:,2]**2))
+        )
         pi = torch.acos(torch.zeros(1)).item() * 2  # which is 3.1415927410125732
-        angle_deg = (angle_rad / pi) * 180
-        print(angle_deg)
+        angle_deg = torch.abs((angle_rad / pi) * 180)
         ambiguity_loss = 1 / (1 + torch.exp(60 - angle_deg))
-        return ambiguity_loss.mean(1, True)
+        return ambiguity_loss
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
@@ -649,11 +570,12 @@ class Trainer:
             source_scale = scale
 
             disp = outputs[("disp", scale)]
-            pred_surface_normal = outputs[("disp_surface_normal", scale)]
+
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
 
             pred_depth = outputs[("depth", 0, scale)]
+            pred_surface_normal = outputs[("disp_surface_normal", scale)]
 
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
@@ -662,7 +584,7 @@ class Trainer:
             img_grad_x, img_grad_y = compute_difference_vector_2(color)
             depth_normal_consistency_loss = self.compute_depth_normal_consistency_loss(pred_depth, pred_surface_normal,
                                                                                        img_grad_x, img_grad_y)
-            # depth_normal_consistency_loss = torch.sum(depth_normal_consistency_loss, 2).sum(1)
+
             reprojection_losses = torch.cat(reprojection_losses, 1)
 
             if not self.opt.disable_automasking:
@@ -714,16 +636,15 @@ class Trainer:
                         idxs > identity_reprojection_loss.shape[1] - 1).float()
 
             loss += to_optimise.mean() / (2 ** scale)
-
             mean_disp = disp.mean(2, True).mean(3, True)
             norm_disp = disp / (mean_disp + 1e-7)
             smooth_loss = get_smooth_loss(norm_disp, color)
 
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
             loss += self.opt.depth_normal_param * depth_normal_consistency_loss.mean() / (2**scale)
-
             direction_ambiguity_loss = self.direction_ambiguity_loss(pred_surface_normal, pred_depth)
-            quit()
+            direction_ambiguity_loss = direction_ambiguity_loss.mean(1, keepdim=True)
+            loss += self.opt.direction_ambiguity_param * direction_ambiguity_loss.mean() / (2**scale)
             total_loss += loss
             losses["loss/{}".format(scale)] = loss
 

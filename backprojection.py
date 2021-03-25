@@ -46,14 +46,9 @@ class Backprojection(nn.Module):
 
         xy = self.xy.repeat(depth.shape[0], 1, 1).cuda()
         ones = self.ones.repeat(depth.shape[0],1,1).cuda()
-        print("KKKKKKKKKK")
         points = torch.matmul(inv_K[:, :3, :3], xy)
-
-        print("J"*20)
         points = depth.view(depth.shape[0], 1, -1) * points
-        print("J"*20)
         points = torch.cat((points, ones), 1)
-        print("J"*20)
 
         if img_like_out:
             points = points.reshape(depth.shape[0], 4, self.height, self.width)

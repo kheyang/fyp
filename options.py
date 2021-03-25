@@ -75,7 +75,12 @@ class MonodepthOptions:
             "--depth_normal_param",
             type=float,
             help="depth normal consistency weight",
-            default=1)
+            default=0.1)
+        self.parser.add_argument(
+            "--direction_ambiguity_param",
+            type=float,
+            help="direction ambiguity weight",
+            default=0.01)
         self.parser.add_argument(
             "--scales",
             nargs="+",
